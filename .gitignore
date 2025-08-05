@@ -1,0 +1,7 @@
+# Carpetas de entorno virtual de Python
+venv/
+.venv/
+__pycache__/
+
+# Archivos del editor de código
+.vscode/

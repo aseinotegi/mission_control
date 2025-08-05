@@ -1,0 +1,7 @@
+# Mutación para despertar o poner en reposo al robot
+mutation SetAwakeState($robotId: String!, $state: AwakeStateEnum!) {
+  executeAwakeCommand(robotID: $robotId, targetState: $state) {
+    id
+    state
+  }
+}

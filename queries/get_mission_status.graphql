@@ -1,0 +1,7 @@
+# Query para obtener el estado actual de la misión en curso
+query GetCurrentMissionStatus($robotId: String!) {
+  isMissionRunning(robotID: $robotId)
+  currentMissionExecution(robotID: $robotId) {
+    status
+  }
+}

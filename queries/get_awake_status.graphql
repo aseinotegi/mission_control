@@ -1,0 +1,5 @@
+query GetAwakeStatus($robotId: String!) {
+  currentRobotStatus(robotID: $robotId) {
+    awakeStatus
+  }
+}

@@ -1,0 +1,7 @@
+# Mutación para reanudar la misión que se encuentre en pausa
+mutation ResumeMission($robotId: String!) {
+  resumeMissionExecution(robotID: $robotId) {
+    id
+    status
+  }
+}
