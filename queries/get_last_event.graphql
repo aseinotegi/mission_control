@@ -1,0 +1,23 @@
+# Query para obtener el evento más reciente de un robot en un periodo corto
+query GetLastRobotEvent($robotId: String!, $from: Timestamp!) {
+  events(
+    robotId: $robotId,
+    period: {
+      start: $from
+    },
+    filter: {
+      first: 1 # Solo queremos el evento más reciente
+    }
+  ) {
+    page {
+      edges {
+        node {
+          timestamp
+          diagnostics {
+            value # Este es el mensaje del evento
+          }
+        }
+      }
+    }
+  }
+}

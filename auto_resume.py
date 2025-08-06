@@ -2,7 +2,7 @@ import os
 import yaml
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from gql import Client, gql
 from gql.transport.requests import RequestsHTTPTransport
 
@@ -26,13 +26,8 @@ def get_token(email, api_key, login_url):
     except Exception as e:
         print(f"❌ Error al obtener el token: {e}"); return None
 
-# <<<<<<< INICIO DEL CAMBIO >>>>>>>
-# --- FUNCIÓN DE AYUDA PARA ESPERAR ESTADOS (AHORA CON RENOVACIÓN DE TOKEN) ---
+# --- FUNCIÓN DE ESPERA DE ESTADO ---
 def wait_for_awake_status(client, query, params, target_status, config, timeout=60, poll_interval=5):
-    """
-    Espera hasta que el robot alcance un 'target_status' específico.
-    Si el token expira durante la espera, intenta renovarlo.
-    """
     print(f"  -> ⏱️  Esperando a que el estado sea '{target_status}' (máx. {timeout} segundos)...")
     start_time = time.time()
     while time.time() - start_time < timeout:
@@ -41,54 +36,42 @@ def wait_for_awake_status(client, query, params, target_status, config, timeout=
             current_status = result['currentRobotStatus']['awakeStatus']
             print(f"    -> Estado actual: {current_status}")
             if current_status == target_status:
-                return True # ¡Éxito!
+                return True
             time.sleep(poll_interval)
         except Exception as e:
             print(f"    -> Error durante la espera: {e}")
-            # Si el error es de tipo '401 Unauthorized', renovamos el token aquí mismo
             if "401" in str(e):
-                print("    -> Token expirado durante la espera. Intentando renovar...")
+                print("    -> Token expirado. Renovando...")
                 new_token = get_token(config['credentials']['user'], config['credentials']['key'], config['api_endpoints']['login_url'])
                 if new_token:
                     client.transport.headers["Authorization"] = f"Bearer {new_token}"
-                    print("    -> Token renovado. Continuando la espera...")
+                    print("    -> Token renovado. Continuando...")
                 else:
-                    print("    -> Fallo al renovar token. Abortando secuencia.")
-                    return False # Abortamos si no podemos renovar el token
-            
+                    return False
             time.sleep(poll_interval)
-    
-    print(f"    -> ❌ TIEMPO DE ESPERA AGOTADO. El estado no cambió a '{target_status}' a tiempo.")
-    return False # Timeout alcanzado
-# <<<<<<< FIN DEL CAMBIO >>>>>>>
+    print(f"    -> ❌ TIEMPO DE ESPERA AGOTADO.")
+    return False
 
 # --- FUNCIÓN PRINCIPAL ---
 def main():
     config = load_config()
     if not config: return
 
-    # Cargar las queries y mutaciones
     try:
         with open("queries/get_mission_status.graphql", 'r', encoding='utf-8') as f: query_mission_status = gql(f.read())
         with open("queries/get_awake_status.graphql", 'r', encoding='utf-8') as f: query_awake_status = gql(f.read())
         with open("queries/awake_command.graphql", 'r', encoding='utf-8') as f: mutation_awake = gql(f.read())
         with open("queries/resume_mission.graphql", 'r', encoding='utf-8') as f: mutation_resume = gql(f.read())
+        with open("queries/get_last_event.graphql", 'r', encoding='utf-8') as f: query_last_event = gql(f.read())
     except FileNotFoundError as e:
         print(f"❌ ERROR CRÍTICO: No se encontró el archivo de query '{e.filename}'."); return
 
-    # Obtener token y crear cliente
     token = get_token(config['credentials']['user'], config['credentials']['key'], config['api_endpoints']['login_url'])
     if not token: return
         
-    transport = RequestsHTTPTransport(
-        url=config['api_endpoints']['graphql_url'],
-        headers={"Authorization": f"Bearer {token}"},
-        verify=True,
-        retries=3
-    )
+    transport = RequestsHTTPTransport(url=config['api_endpoints']['graphql_url'], headers={"Authorization": f"Bearer {token}"}, retries=3)
     client = Client(transport=transport)
     params = {"robotId": config['robot_info']['id']}
-    
     recovery_sequence_active = False
 
     print("\n" + "="*50)
@@ -100,44 +83,52 @@ def main():
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔎 Comprobando estado del robot...")
             
             result = client.execute(query_mission_status, variable_values=params)
-            
             is_running = result.get('isMissionRunning')
             mission_exec = result.get('currentMissionExecution')
             status = mission_exec.get('status') if mission_exec else None
 
             if is_running and status == 'PAUSED' and not recovery_sequence_active:
-                print(f"\n⚠️  ¡MISIÓN PAUSADA DETECTADA! Iniciando secuencia de recuperación robusta...")
-                recovery_sequence_active = True
-
-                print("\n--- PASO 1: Poner en reposo ---")
-                client.execute(mutation_awake, variable_values={'robotId': params['robotId'], 'state': 'ASLEEP'})
-                print("  -> Comando ASLEEP enviado.")
+                print(f"  -> Misión en estado PAUSED. Verificando último evento...")
                 
-                # <<<<<<< INICIO DEL CAMBIO >>>>>>>
-                # Pasamos el objeto 'config' a la función de espera
-                if wait_for_awake_status(client, query_awake_status, params, "ASLEEP", config):
-                    print("✅ Robot confirmado en estado ASLEEP.")
-
-                    print("\n--- PASO 2: Despertar robot ---")
-                    client.execute(mutation_awake, variable_values={'robotId': params['robotId'], 'state': 'AWAKE'})
-                    print("  -> Comando AWAKE enviado.")
-                    
-                    if wait_for_awake_status(client, query_awake_status, params, "AWAKE", config):
-                        print("✅ Robot confirmado en estado AWAKE.")
-
-                        print("\n--- PASO 3: Reanudar misión ---")
-                        print("  -> Enviando comando RESUME MISSION...")
-                        resume_result = client.execute(mutation_resume, variable_values=params)
-                        new_status = resume_result.get('resumeMissionExecution', {}).get('status')
-                        print(f"✅ Secuencia completada. Nuevo estado esperado: {new_status}")
-                    else:
-                        print("❌ ERROR DE SECUENCIA: El robot no confirmó el estado AWAKE a tiempo.")
+                max_age_seconds = config['recovery_triggers']['max_event_age_seconds']
+                from_ts = int((datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)).timestamp() * 1000)
+                event_result = client.execute(query_last_event, variable_values={'robotId': params['robotId'], 'from': from_ts})
+                
+                last_event = event_result.get('events', {}).get('page', {}).get('edges', [])
+                
+                if not last_event:
+                    print(f"  -> No se encontraron eventos recientes en los últimos {max_age_seconds} segundos. No se actúa.")
                 else:
-                    print("❌ ERROR DE SECUENCIA: El robot no confirmó el estado ASLEEP a tiempo.")
-                # <<<<<<< FIN DEL CAMBIO >>>>>>>
+                    # <<<<<<< INICIO DEL CAMBIO >>>>>>>
+                    # Convertimos a minúsculas para una comparación insensible a mayúsculas/minúsculas
+                    last_event_message = last_event[0]['node']['diagnostics'][0]['value'].lower()
+                    safe_triggers = [trigger.lower() for trigger in config['recovery_triggers']['event_messages']]
+                    # <<<<<<< FIN DEL CAMBIO >>>>>>>
 
-                print("-" * 50)
-            
+                    print(f"  -> Último evento detectado: '{last_event_message}'")
+                    
+                    if last_event_message in safe_triggers:
+                        print(f"  -> El evento es un disparador válido. ¡Iniciando secuencia de recuperación!")
+                        recovery_sequence_active = True
+
+                        print("\n--- PASO 1: Poner en reposo ---")
+                        client.execute(mutation_awake, variable_values={'robotId': params['robotId'], 'state': 'ASLEEP'})
+                        if wait_for_awake_status(client, query_awake_status, params, "ASLEEP", config):
+                            print("✅ Robot confirmado en estado ASLEEP.")
+                            print("\n--- PASO 2: Despertar robot ---")
+                            client.execute(mutation_awake, variable_values={'robotId': params['robotId'], 'state': 'AWAKE'})
+                            if wait_for_awake_status(client, query_awake_status, params, "AWAKE", config):
+                                print("✅ Robot confirmado en estado AWAKE.")
+                                print("\n--- PASO 3: Reanudar misión ---")
+                                resume_result = client.execute(mutation_resume, variable_values=params)
+                                new_status = resume_result.get('resumeMissionExecution', {}).get('status')
+                                print(f"✅ Secuencia completada. Nuevo estado: {new_status}")
+                            else: print("❌ ERROR: El robot no confirmó el estado AWAKE a tiempo.")
+                        else: print("❌ ERROR: El robot no confirmó el estado ASLEEP a tiempo.")
+                        print("-" * 50)
+                    else:
+                        print(f"  -> El evento no está en la lista de disparadores seguros. No se actúa.")
+
             elif is_running and status == 'IN_PROGRESS' and recovery_sequence_active:
                 print("✅ Misión reanudada con éxito. El sistema de recuperación vuelve a estar activo.")
                 recovery_sequence_active = False

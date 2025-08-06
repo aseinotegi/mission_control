@@ -1,5 +1,4 @@
 # Configuración para el script de reanudación automática de misiones
-
 credentials:
   user: 'ander.sein@servexternos.repsol.com'
   key: 'hPAPq3u1.BMjE7X8d1NrmKdp6OxhpD/Y3LeUjLNq4yGMssSR0NU8IpTG/'
@@ -8,14 +7,20 @@ robot_info:
   id: "67adc0f808e884ffb30b63e9"
 
 api_endpoints:
-  # Usamos la URL HTTP para todas las operaciones
   graphql_url: "https://api.graphql.energy-robotics.com/graphql"
   login_url: "https://login.energy-robotics.com/api/loginApi"
 
 settings:
-  # Cada cuántos segundos comprobar el estado del robot.
-  # Se recomienda no poner un valor muy bajo para no sobrecargar la API.
-  check_interval_seconds: 10 # 1 minuto
-
-  # Tiempo de espera en segundos entre los comandos de la secuencia (asleep -> awake -> resume)
+  check_interval_seconds: 10
   action_delay_seconds: 10
+
+# Define las condiciones que deben cumplirse para iniciar una recuperación
+recovery_triggers:
+  # El último evento debe haber ocurrido en los últimos X segundos para ser considerado relevante
+  max_event_age_seconds: 15 # 15 segundos
+
+  # Lista de mensajes de evento que son considerados "seguros" para una recuperación automática
+  event_messages:
+    - "notification.behaviorNavigationFailed" 
+    - "notification.behaviorDockingMaximumRetriesExceeded"
+    - "notification.behaviorprincipaldrivernotsupervising"
