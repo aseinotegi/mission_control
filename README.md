@@ -1,120 +1,111 @@
-# Generador de Informes de Misión para Robot
+# Sistema de Reanudación Automática de Misiones
 
-Este proyecto contiene un script de Python (`main.py`) diseñado para conectarse a la API de Energy Robotics, descargar los datos de las misiones de un robot específico para una fecha determinada, procesar la información y generar un informe diario en formato PDF y CSV.
+Este proyecto contiene un script de Python (`auto_resume.py`) diseñado para monitorizar un robot de Energy Robotics. Su principal función es detectar cuándo una misión entra en estado `PAUSED` y, si la causa es una de las predefinidas como "recuperables", ejecutar automáticamente una secuencia de comandos para intentar reanudar la misión.
 
-## Características Principales
-
-* Generación de informes para un día específico (Hoy, Ayer o una fecha concreta).
-* Descarga de datos de misiones, incluyendo fotos, lecturas de sensores (gases) y datos de análisis (JSON).
-* Generación de un informe en PDF con resúmenes, gráficos de gases y tablas de eventos.
-* Creación de archivos CSV con los datos brutos de POIs y eventos.
-* Sistema de alarmas configurable para mediciones de gases, con alertas visuales en los gráficos del PDF.
+La secuencia de recuperación es:
+1.  Enviar comando `ASLEEP`.
+2.  Esperar un tiempo configurable.
+3.  Enviar comando `AWAKE`.
+4.  Esperar un tiempo configurable.
+5.  Enviar comando `resumeMissionExecution`.
 
 ---
 
-## 🛠️ Configuración del Entorno
+## Instalación
 
-Para poder ejecutar el script, necesitas tener el siguiente software instalado y configurado.
+Para configurar el entorno y ejecutar el script, sigue estos pasos:
 
-### Prerrequisitos
+1.  **Clonar el Repositorio**
+    ```bash
+    git clone git@github.com:tu_usuario/tu-repositorio.git
+    cd tu-repositorio
+    ```
 
-* **Python 3.9** o superior.
-* La librería `pip` para instalar paquetes de Python.
+2.  **Crear Archivo de Dependencias**
+    Crea un archivo llamado `requirements.txt` con el siguiente contenido:
+    ```
+    gql[requests]
+    PyYAML
+    ```
 
-### Instalación de Dependencias
-
-1.  Clona o descarga este repositorio en tu máquina.
-2.  Abre una terminal en la carpeta raíz del proyecto.
-3.  Instala todas las librerías necesarias ejecutando el siguiente comando:
-
+3.  **Instalar Dependencias**
+    Se recomienda crear un entorno virtual de Python primero.
     ```bash
     pip install -r requirements.txt
     ```
 
+4.  **Crear Archivos de GraphQL**
+    Asegúrate de que la carpeta `queries` existe y contiene los siguientes archivos con su contenido correspondiente:
+    * `queries/get_mission_status.graphql`
+    * `queries/get_awake_status.graphql`
+    * `queries/awake_command.graphql`
+    * `queries/resume_mission.graphql`
+
 ---
 
-## ⚙️ Archivo de Configuración (`configuration.yaml`)
+## Configuración
 
-Este es el archivo principal para adaptar el script a tus necesidades sin tener que modificar el código. Aquí se definen las credenciales, los IDs del robot y los umbrales de alarma.
+Toda la configuración del script se gestiona a través del archivo `resume_config.yaml`. **Este archivo no debe subirse a GitHub**, ya que contiene información sensible.
 
-A continuación se describe cada parámetro:
+### `resume_config.yaml`
 
 ```yaml
-# ----------------- CREDENCIALES DE ACCESO -----------------
+# Credenciales de acceso a la API
 credentials:
-  # Tu email de usuario en la plataforma Energy Robotics
-  user: 'tu_email@example.com'
-  # Tu clave de API generada en la plataforma
-  key: 'tu_clave_de_api'
+  user: 'tu_usuario@example.com'
+  key: 'tu_api_key'
 
-# ----------------- INFORMACIÓN DEL ROBOT Y SITIO -----------------
+# Información del robot a monitorizar
 robot_info:
-  # El ID del 'Site' (Sitio) donde opera el robot.
-  site_id: "ID_DEL_SITIO"
-  # El ID del robot específico del que quieres obtener los informes.
-  robot_id: "ID_DEL_ROBOT"
+  id: "ID_DEL_ROBOT"
 
-# ----------------- ENDPOINTS DE LA API -----------------
+# Endpoints de la API
 api_endpoints:
-  # URL del servidor GraphQL. No suele ser necesario cambiarla.
   graphql_url: "[https://api.graphql.energy-robotics.com/graphql](https://api.graphql.energy-robotics.com/graphql)"
-  # URL para la autenticación. No suele ser necesario cambiarla.
   login_url: "[https://login.energy-robotics.com/api/loginApi](https://login.energy-robotics.com/api/loginApi)"
 
-# ----------------- UMBRALES DE ALARMA PARA GASES -----------------
-gas_alarms:
-  # El nombre de la clave debe coincidir EXACTAMENTE con el campo "name"
-  # que devuelve la API. Por ejemplo: "Methane (CH4)".
-  "Methane (CH4)":
-    # La unidad de medida. Debe coincidir con la de la API para que la alarma se active.
-    unit: "%LEL"
-    # Umbral para la Alarma de nivel 1 (A1).
-    a1: 10.0
-    # Umbral para la Alarma de nivel 2 (A2).
-    a2: 40.0
-  "Hydrogen Sulfide (H2S)":
-    unit: "ppm"
-    a1: 5.0
-    a2: 10.0
-  # Y así para el resto de los gases...
+# Ajustes de tiempo del script
+settings:
+  check_interval_seconds: 60
+  action_delay_seconds: 10
+
+# Disparadores de la secuencia de recuperación
+recovery_triggers:
+  max_event_age_seconds: 120
+  event_messages:
+    - "notification.behaviorNavigationFailed"
+    - "notification.behaviorPrincipalDriverNotSupervising"
+    - "notification.behaviorDockingMaximumRetriesExceeded"
 ```
 
-### Cómo Añadir o Modificar una Alarma de Gas
+### Descripción de Parámetros Clave
 
-Si en el futuro necesitas monitorizar un nuevo gas o cambiar los umbrales de uno existente, sigue estos pasos:
+* **`robot_info.id`**: Aquí debes poner el `ID` del robot que quieres que el script monitorice.
+* **`settings.check_interval_seconds`**: Frecuencia (en segundos) con la que el script comprobará el estado del robot. Un valor de `60` significa una vez por minuto.
+* **`settings.action_delay_seconds`**: La pausa en segundos entre los comandos de la secuencia de recuperación (entre `ASLEEP` y `AWAKE`, y entre `AWAKE` y `RESUME`).
+* **`recovery_triggers.max_event_age_seconds`**: Para que un evento sea considerado la causa de la pausa, debe haber ocurrido en los últimos X segundos. Esto evita que un evento antiguo active una recuperación ahora.
+* **`recovery_triggers.event_messages`**: **Esta es la lista más importante.** Contiene los mensajes de evento que son considerados "seguros" para intentar una recuperación. Si una misión se pausa y su último evento no está en esta lista, el script no hará nada.
 
-1.  **Obtén el Nombre y Unidad Exactos:** Asegúrate de saber el nombre (`name`) y la unidad (`unit`) exactos con los que la API reporta el gas. Puedes verlo en la sección de "Análisis de Gases" de un informe PDF ya generado.
-2.  **Abre `configuration.yaml`:** Edita el archivo de configuración.
-3.  **Añade o Modifica la Entrada:**
-    * **Para añadir un nuevo gas**, crea un nuevo bloque dentro de `gas_alarms`. Por ejemplo, para un gas ficticio "GasX":
-        ```yaml
-        "GasX (GX)":
-          unit: "%vol"
-          a1: 100.0
-          a2: 250.0
-        ```
-    * **Para modificar un gas existente**, simplemente cambia los valores de `a1` o `a2` en su bloque correspondiente.
+#### Cómo Añadir un Nuevo Evento de Disparo
+
+Simplemente añade una nueva línea a la lista `event_messages` en el archivo `resume_config.yaml`. Por ejemplo, para que el script también actúe ante un `softwareCollisionElevationMap`:
+
+```yaml
+  event_messages:
+    - "notification.behaviorNavigationFailed"
+    - "notification.behaviorPrincipalDriverNotSupervising"
+    - "notification.behaviorDockingMaximumRetriesExceeded"
+    - "notification.softwareCollisionElevationMap" # Nueva línea añadida
+```
+La comparación es insensible a mayúsculas/minúsculas.
 
 ---
 
-## 🚀 Cómo Ejecutar el Script
+## Uso
 
-Tienes dos formas de ejecutar el generador de informes:
-
-### 1. Modo Interactivo (Recomendado para uso manual)
-
-Ejecuta el script sin ningún argumento. Te preguntará qué fecha quieres usar.
-
+Para ejecutar el script en primer plano (ideal para pruebas):
 ```bash
-python main.py
+python auto_resume.py
 ```
-Aparecerá un menú en la consola para que elijas entre "Hoy", "Ayer" o una "Fecha específica".
 
-### 2. Modo Automático (Para tareas programadas)
-
-Pasa la fecha directamente como un argumento usando el flag `--date`. Esto es ideal para automatizar la ejecución del script.
-
-```bash
-# Ejemplo para generar el informe del 15 de julio de 2025
-python main.py --date 2025-07-15
-```
+Para una ejecución permanente y desatendida, se recomienda configurar el script como un **servicio de `systemd`** en un servidor Linux, utilizando **Docker** para contenerizar la aplicación, tal y como se describió en guías anteriores.
