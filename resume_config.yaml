@@ -17,10 +17,11 @@ settings:
 # Define las condiciones que deben cumplirse para iniciar una recuperación
 recovery_triggers:
   # El último evento debe haber ocurrido en los últimos X segundos para ser considerado relevante
-  max_event_age_seconds: 15 # 15 segundos
+  max_event_age_seconds: 30 # 30 segundos
 
   # Lista de mensajes de evento que son considerados "seguros" para una recuperación automática
   event_messages:
     - "notification.behaviorNavigationFailed" 
     - "notification.behaviorDockingMaximumRetriesExceeded"
     - "notification.behaviorprincipaldrivernotsupervising"
+    - "notification.behaviorwirelesschargerconnectionfailed"
